@@ -7,6 +7,7 @@ import { Card } from '@/components/Card';
 import { parseAvatar } from '@/lib/utils';
 import { Check, MessageCircle, Skull } from 'lucide-react';
 import { motion } from 'framer-motion';
+import WordPeek from './WordPeek';
 
 export default function Discussion() {
   const { state, playerId, finishSpeaking } = useGame();
@@ -102,6 +103,8 @@ export default function Discussion() {
             </div>
         )}
       </div>
+
+      <WordPeek />
     </div>
   );
 }

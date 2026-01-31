@@ -84,6 +84,9 @@ function gameReducer(state: GameState, action: Action): GameState {
       // But for Host, we might process it if we dispatched it locally?
       // Actually, Host receives "CLIENT_ACTION" -> "JOIN_ROOM"
       if (state.players.some(p => p.name === action.payload.playerName)) return state;
+      
+      const isLateJoiner = state.phase !== 'LOBBY';
+      
       return {
         ...state,
         players: [
@@ -92,13 +95,13 @@ function gameReducer(state: GameState, action: Action): GameState {
             id: crypto.randomUUID(),
             name: action.payload.playerName,
             avatar: generateAvatar(),
-            role: null,
+            role: null, // Spectators have no role or word
             word: null,
             isHost: false,
             isReady: false,
-            isAlive: true,
-            hasSeenWord: false,
-            hasFinishedSpeaking: false,
+            isAlive: !isLateJoiner, // Late joiners are dead/spectators
+            hasSeenWord: isLateJoiner, // Don't block reveal
+            hasFinishedSpeaking: isLateJoiner, // Don't block discussion
             votedForId: null,
           }
         ]
@@ -147,7 +150,8 @@ function gameReducer(state: GameState, action: Action): GameState {
       const playersAfterReveal = state.players.map(p => 
         p.id === action.payload.playerId ? { ...p, hasSeenWord: true } : p
       );
-      const allSeen = playersAfterReveal.every(p => p.hasSeenWord);
+      // Check if all ALIVE players have seen
+      const allSeen = playersAfterReveal.filter(p => p.isAlive).every(p => p.hasSeenWord);
       return {
         ...state,
         players: playersAfterReveal,

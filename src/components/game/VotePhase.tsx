@@ -6,6 +6,7 @@ import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { parseAvatar } from '@/lib/utils';
 import { motion } from 'framer-motion';
+import WordPeek from './WordPeek';
 
 export default function VotePhase() {
   const { state, playerId, vote } = useGame();
@@ -105,6 +106,8 @@ export default function VotePhase() {
           Confirmer le vote
         </Button>
       </div>
+      
+      <WordPeek />
     </div>
   );
 }
