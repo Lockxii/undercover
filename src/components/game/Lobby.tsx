@@ -13,7 +13,7 @@ export default function Lobby() {
   const [copied, setCopied] = useState(false);
   
   const players = state.players || [];
-  const canStart = isHost && players.filter(p => p.isReady).length >= 4;
+  const canStart = isHost && players.filter(p => p.isReady).length >= 3;
 
   const myPlayer = players.find(p => p.id === playerId);
 
