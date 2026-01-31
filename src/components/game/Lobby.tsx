@@ -7,6 +7,7 @@ import { useGame } from '@/context/GameContext';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { parseAvatar } from '@/lib/utils';
+import Mascot from '@/components/Mascot';
 
 export default function Lobby() {
   const { state, playerId, isHost, toggleReady, startGame } = useGame();
@@ -80,9 +81,10 @@ export default function Lobby() {
       </div>
 
       <div className="py-4 space-y-3 bg-brand-background">
-        <div className="bg-white p-4 rounded-2xl text-sm text-gray-500 border-l-4 border-blue-400">
-          <strong>Règle :</strong> Tous les joueurs auront le même mot sauf un. L'imposteur doit bluffer pour ne pas être découvert.
-        </div>
+        <Mascot 
+            message="Préparez-vous ! Un seul d'entre vous mentira... Soyez attentifs aux détails !" 
+            className="mb-2"
+        />
 
         {myPlayer && (
           <Button 

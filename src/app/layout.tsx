@@ -16,6 +16,10 @@ export const metadata: Metadata = {
   title: "Undercover Pro",
   description: "Démasquez l'imposteur parmi vous !",
   manifest: "/manifest.json",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({

@@ -1,4 +1,41 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="100" fill="#58CC02"/>
-  <text x="50%" y="50%" font-family="Arial, sans-serif" font-weight="bold" font-size="250" fill="white" text-anchor="middle" dy=".3em">?</text>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="0" flood-color="#46A302" />
+    </filter>
+  </defs>
+  
+  <!-- Background Circle -->
+  <circle cx="256" cy="256" r="256" fill="#58CC02"/>
+  
+  <!-- Character Head -->
+  <g transform="translate(0, 40)">
+    <!-- Face Shadow -->
+    <path d="M156 180 h200 a100 100 0 0 1 100 100 v80 a60 60 0 0 1 -60 60 h-280 a60 60 0 0 1 -60 -60 v-80 a100 100 0 0 1 100 -100" fill="#E5E5E5"/>
+    
+    <!-- Face -->
+    <path d="M156 170 h200 a100 100 0 0 1 100 100 v80 a60 60 0 0 1 -60 60 h-280 a60 60 0 0 1 -60 -60 v-80 a100 100 0 0 1 100 -100" fill="#FFFFFF"/>
+    
+    <!-- Sunglasses (Spy Mask) -->
+    <g transform="translate(106, 230)">
+       <rect x="0" y="0" width="300" height="90" rx="35" fill="#2B3440"/>
+       <rect x="20" y="15" width="110" height="60" rx="20" fill="#1CB0F6" opacity="0.3"/>
+       <rect x="170" y="15" width="110" height="60" rx="20" fill="#1CB0F6" opacity="0.3"/>
+       <!-- Bridge -->
+       <rect x="130" y="20" width="40" height="10" fill="#2B3440"/> 
+    </g>
+
+    <!-- Smile (subtle) -->
+    <path d="M226 360 q30 20 60 0" stroke="#2B3440" stroke-width="8" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- Hat -->
+  <g transform="translate(86, 60)">
+     <!-- Hat Brim -->
+     <rect x="-40" y="120" width="420" height="30" rx="15" fill="#2B3440"/>
+     <!-- Hat Top -->
+     <path d="M50 120 L70 20 A40 40 0 0 1 110 0 H230 A40 40 0 0 1 270 20 L290 120 Z" fill="#2B3440"/>
+     <!-- Hat Band -->
+     <path d="M54 100 h232 l5 20 h-242 Z" fill="#FF9600"/>
+  </g>
 </svg>

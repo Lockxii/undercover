@@ -7,12 +7,29 @@ import { Card } from '@/components/Card';
 import { parseAvatar } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
+import { Share2, Check as CheckIcon } from 'lucide-react';
 
 export default function Result() {
   const { state, playerId, isHost, resetGame, nextRound } = useGame();
   const [revealed, setRevealed] = useState(false);
+  const [shared, setShared] = useState(false);
   
   const impostor = state.players.find(p => p.role === 'IMPOSTER');
+  
+  const shareResult = async () => {
+      const gameResult = state.impostorFound;
+      const text = gameResult === true 
+        ? "🕵️ J'ai démasqué l'imposteur sur Undercover Pro ! Les civils gagnent ! ✌️"
+        : "🤫 J'ai survécu en tant qu'imposteur sur Undercover Pro ! Victoire totale ! 😈";
+      
+      try {
+          await navigator.clipboard.writeText(text + "\nJoue avec nous : " + window.location.origin);
+          setShared(true);
+          setTimeout(() => setShared(false), 2000);
+      } catch (err) {
+          console.error(err);
+      }
+  };
   
   // Find who was eliminated this round based on votes
   // Logic mirrors Reducer: find max votes
@@ -169,8 +186,22 @@ export default function Result() {
         )}
       </div>
 
+      {revealed && (
+        <div className="py-2">
+            <Button 
+                fullWidth 
+                variant="outline" 
+                onClick={shareResult}
+                className="flex items-center justify-center gap-2 border-brand-blue text-brand-blue"
+            >
+                {shared ? <CheckIcon size={18} /> : <Share2 size={18} />}
+                {shared ? "Copié !" : "Partager le résultat"}
+            </Button>
+        </div>
+      )}
+
       {isHost && revealed && (
-        <div className="py-4">
+        <div className="py-2">
             {isGameOver ? (
                 <Button fullWidth size="xl" onClick={resetGame}>
                     Rejouer

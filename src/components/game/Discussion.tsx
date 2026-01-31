@@ -8,6 +8,7 @@ import { parseAvatar } from '@/lib/utils';
 import { Check, MessageCircle, Skull, Scale } from 'lucide-react';
 import { motion } from 'framer-motion';
 import WordPeek from './WordPeek';
+import Mascot from '@/components/Mascot';
 
 export default function Discussion() {
   const { state, playerId, finishSpeaking, isHost, startTieVote } = useGame();
@@ -97,6 +98,13 @@ export default function Discussion() {
       </div>
 
       <div className="py-6 space-y-4 bg-brand-background text-center">
+        <Mascot 
+            message={isTieBreaker 
+                ? "Ouh là ! Égalité ! Écoutez bien leurs dernières justifications avant de trancher." 
+                : "Observez bien les réactions... L'imposteur finit souvent par se contredire !"}
+            className="mb-2 text-left"
+        />
+
         {!isTieBreaker && (
             countWaiting > 0 ? (
             <p className="text-gray-400 font-bold animate-pulse">
