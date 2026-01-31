@@ -1,9 +1,10 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useReducer, useState } from 'react';
+import React, { createContext, useContext, useEffect, useReducer, useState, useRef } from 'react';
 import { GameState, Player, Role } from '@/types/game';
 import { generateRoomSlug, generateAvatar } from '@/lib/utils';
 import { getRandomWordPair } from '@/lib/words';
+import Peer, { DataConnection } from 'peerjs';
 
 // --- Actions ---
 type Action =
@@ -38,7 +39,7 @@ interface GameContextType {
   state: GameState;
   playerId: string;
   isHost: boolean;
-  createRoom: (name: string, slug?: string) => void;
+  createRoom: (name: string, slug?: string) => Promise<boolean>; // Return success/fail for host claim
   joinRoom: (slug: string, name: string) => void;
   toggleReady: () => void;
   startGame: () => void;
@@ -47,6 +48,7 @@ interface GameContextType {
   vote: (targetId: string) => void;
   nextRound: () => void;
   resetGame: () => void;
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
 }
 
 const GameContext = createContext<GameContextType | null>(null);
@@ -78,6 +80,9 @@ function gameReducer(state: GameState, action: Action): GameState {
       };
 
     case 'JOIN_ROOM':
+      // We don't add player here for Client, we wait for Host to Sync back
+      // But for Host, we might process it if we dispatched it locally?
+      // Actually, Host receives "CLIENT_ACTION" -> "JOIN_ROOM"
       if (state.players.some(p => p.name === action.payload.playerName)) return state;
       return {
         ...state,
@@ -167,8 +172,8 @@ function gameReducer(state: GameState, action: Action): GameState {
          p.id === action.payload.voterId ? { ...p, votedForId: action.payload.targetId } : p
        );
        
-       const alivePlayers = playersVoted.filter(p => p.isAlive);
-       const allVoted = alivePlayers.every(p => p.votedForId !== null);
+       const alivePlayersList = playersVoted.filter(p => p.isAlive);
+       const allVoted = alivePlayersList.every(p => p.votedForId !== null);
        
        let nextState = {
          ...state,
@@ -191,12 +196,11 @@ function gameReducer(state: GameState, action: Action): GameState {
              maxVotes = count;
              eliminatedId = pid;
            } else if (count === maxVotes) {
-             eliminatedId = null; // Tie
+             eliminatedId = null; 
            }
          }
          
          if (eliminatedId) {
-             // Eliminate player
              nextState.players = nextState.players.map(p => 
                  p.id === eliminatedId ? { ...p, isAlive: false } : p
              );
@@ -204,25 +208,17 @@ function gameReducer(state: GameState, action: Action): GameState {
              const impostor = nextState.players.find(p => p.role === 'IMPOSTER');
              const eliminatedIsImpostor = impostor && eliminatedId === impostor.id;
              
-             // Check Win Conditions
              if (eliminatedIsImpostor) {
-                 nextState.impostorFound = true; // Civilians Win
+                 nextState.impostorFound = true; 
              } else {
-                 // Check if Impostor Parity (1 Impostor, 1 Civil left)
                  const remainingAlive = nextState.players.filter(p => p.isAlive).length;
-                 // Assuming 1 impostor for now
                  if (remainingAlive <= 2) {
-                     nextState.impostorFound = false; // Impostor Wins
+                     nextState.impostorFound = false;
                  } else {
-                     nextState.impostorFound = null; // Game continues
+                     nextState.impostorFound = null;
                  }
              }
          } else {
-             // TIE - No one eliminated usually, or random? 
-             // For MVP, if tie, no one dies, next round? Or re-vote?
-             // Prompt says "on fait mourrir le joueur", implying definitive vote.
-             // Let's assume tie = no death = next round or re-vote.
-             // Let's implement: Tie -> No elimination -> Next Round.
              nextState.impostorFound = null;
          }
        }
@@ -266,134 +262,197 @@ function gameReducer(state: GameState, action: Action): GameState {
   }
 }
 
+const PEER_PREFIX = 'undercover-pro-v1-';
+
 export function GameProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(gameReducer, initialState);
   const [playerId, setPlayerId] = useState<string>('');
-  const [channel, setChannel] = useState<BroadcastChannel | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  
+  const peerRef = useRef<Peer | null>(null);
+  const connectionsRef = useRef<DataConnection[]>([]);
+  const hostConnectionRef = useRef<DataConnection | null>(null);
 
-  useEffect(() => {
-    if (state.roomSlug) {
-      const bc = new BroadcastChannel(`undercover-game-${state.roomSlug}`);
-      bc.onmessage = (event) => {
-        const msg = event.data;
-        if (msg.type === 'SYNC_STATE') {
-           dispatch({ type: 'SYNC_STATE', payload: msg.payload });
-        } else if (msg.type === 'CLIENT_ACTION') {
-          if (state.players.find(p => p.id === playerId)?.isHost) {
-            dispatch(msg.action);
-          }
-        } else if (msg.type === 'PING') {
-           const me = state.players.find(p => p.id === playerId);
-           if (me?.isHost) {
-             bc.postMessage({ type: 'SYNC_STATE', payload: state });
-           }
-        }
-      };
-      setChannel(bc);
-      return () => bc.close();
-    }
-  }, [state.roomSlug, playerId]);
-
+  // --- Host Logic: Broadcast State ---
   useEffect(() => {
     const me = state.players.find(p => p.id === playerId);
-    if (me?.isHost && channel) {
-      channel.postMessage({ type: 'SYNC_STATE', payload: state });
+    if (me?.isHost && connectionsRef.current.length > 0) {
+      connectionsRef.current.forEach(conn => {
+        if (conn.open) {
+          conn.send({ type: 'SYNC_STATE', payload: state });
+        }
+      });
     }
-  }, [state, playerId, channel]);
+  }, [state, playerId]);
 
-  const createRoomWithSlug = (name: string, slug?: string) => {
+  // --- Actions ---
+  
+  const createRoom = async (name: string, slug?: string): Promise<boolean> => {
+    setConnectionStatus('connecting');
     const newSlug = slug || generateRoomSlug();
-    const hostId = crypto.randomUUID();
-    const hostPlayer: Player = {
-      id: hostId,
-      name,
-      avatar: generateAvatar(),
-      role: null,
-      word: null,
-      isHost: true,
-      isReady: false,
-      isAlive: true,
-      hasSeenWord: false,
-      hasFinishedSpeaking: false,
-      votedForId: null,
-    };
-    
-    const newState: GameState = {
-      ...initialState,
-      roomId: crypto.randomUUID(),
-      roomSlug: newSlug,
-      players: [hostPlayer],
-    };
-    
-    dispatch({ type: 'SYNC_STATE', payload: newState });
-    setPlayerId(hostId);
+    const peerId = `${PEER_PREFIX}${newSlug}`;
+
+    return new Promise((resolve) => {
+        // Attempt to create Peer with specific ID (Host)
+        const peer = new Peer(peerId, { debug: 1 });
+        
+        peer.on('open', (id) => {
+            console.log('Host created room:', id);
+            peerRef.current = peer;
+            setConnectionStatus('connected');
+            
+            // Initialize Game State
+            const hostId = crypto.randomUUID();
+            const hostPlayer: Player = {
+              id: hostId,
+              name,
+              avatar: generateAvatar(),
+              role: null,
+              word: null,
+              isHost: true,
+              isReady: false,
+              isAlive: true,
+              hasSeenWord: false,
+              hasFinishedSpeaking: false,
+              votedForId: null,
+            };
+            
+            const newState: GameState = {
+              ...initialState,
+              roomId: crypto.randomUUID(),
+              roomSlug: newSlug,
+              players: [hostPlayer],
+            };
+            
+            dispatch({ type: 'SYNC_STATE', payload: newState });
+            setPlayerId(hostId);
+
+            // Listen for connections
+            peer.on('connection', (conn) => {
+                connectionsRef.current.push(conn);
+                conn.on('data', (data: any) => {
+                    // Host receives Actions from Clients
+                    if (data.type === 'CLIENT_ACTION') {
+                        // Special Case: JOIN_ROOM needs to be handled carefully to assign ID
+                        if (data.action.type === 'JOIN_ROOM') {
+                             // Check if already in
+                             if (newState.players.some(p => p.name === data.action.payload.playerName)) return;
+                             
+                             // Dispatch Join locally
+                             dispatch(data.action);
+                        } else {
+                            // Regular action
+                            dispatch(data.action);
+                        }
+                    }
+                });
+                
+                conn.on('open', () => {
+                    // Send current state immediately
+                    // We need the *latest* state. 
+                    // Since state in closure might be stale, we use the reducer dispatch?
+                    // Actually we rely on the useEffect hook to sync when state updates.
+                    // But for initial connect, we might want to force sync?
+                    // The useEffect [state] will trigger if we change something.
+                    // If not, we might need a ref for current state?
+                    // For MVP, usually the join triggers a state change (add player), so sync happens.
+                });
+            });
+
+            resolve(true);
+        });
+
+        peer.on('error', (err) => {
+            console.error('Peer error:', err);
+            // If ID is taken, it means room exists
+            if (err.type === 'unavailable-id') {
+                resolve(false);
+            } else {
+                setConnectionStatus('error');
+                resolve(false);
+            }
+        });
+    });
   };
 
   const joinRoom = (slug: string, name: string) => {
-    const bc = new BroadcastChannel(`undercover-game-${slug}`);
-    setChannel(bc);
-    bc.postMessage({ 
-       type: 'CLIENT_ACTION', 
-       action: { type: 'JOIN_ROOM', payload: { slug, playerName: name } } 
+    setConnectionStatus('connecting');
+    const targetPeerId = `${PEER_PREFIX}${slug}`;
+    
+    // Client has random ID
+    const peer = new Peer();
+    peerRef.current = peer;
+
+    peer.on('open', () => {
+        const conn = peer.connect(targetPeerId);
+        hostConnectionRef.current = conn;
+
+        conn.on('open', () => {
+            setConnectionStatus('connected');
+            // Send Join Request
+            conn.send({ 
+                type: 'CLIENT_ACTION', 
+                action: { type: 'JOIN_ROOM', payload: { slug, playerName: name } } 
+            });
+        });
+
+        conn.on('data', (data: any) => {
+            if (data.type === 'SYNC_STATE') {
+                dispatch({ type: 'SYNC_STATE', payload: data.payload });
+                // Find my ID if not set
+                if (!playerId) { // This closure might capture stale playerId, check in render?
+                    // We can't easily check state here.
+                    // But we can check the payload.
+                    const me = data.payload.players.find((p: Player) => p.name === name);
+                    if (me) setPlayerId(me.id);
+                }
+            }
+        });
+
+        conn.on('close', () => {
+            setConnectionStatus('disconnected');
+            alert("L'hôte s'est déconnecté.");
+        });
+        
+        peer.on('error', (err) => {
+             console.error('Client peer error', err);
+             setConnectionStatus('error');
+        });
     });
-    bc.onmessage = (event) => {
-      const msg = event.data;
-      if (msg.type === 'SYNC_STATE') {
-         dispatch({ type: 'SYNC_STATE', payload: msg.payload });
-         const myPlayer = msg.payload.players.find((p: Player) => p.name === name);
-         if (myPlayer) setPlayerId(myPlayer.id);
+  };
+
+  // Helper to send action to Host (or dispatch if I am Host)
+  const sendAction = (action: Action) => {
+      const me = state.players.find(p => p.id === playerId);
+      if (me?.isHost) {
+          dispatch(action);
+      } else {
+          hostConnectionRef.current?.send({ type: 'CLIENT_ACTION', action });
       }
-    };
   };
 
-  const toggleReady = () => {
-    if (channel) channel.postMessage({ type: 'CLIENT_ACTION', action: { type: 'TOGGLE_READY', payload: { playerId } } });
-    const me = state.players.find(p => p.id === playerId);
-    if (me?.isHost) dispatch({ type: 'TOGGLE_READY', payload: { playerId } });
-  };
-
-  const startGame = () => {
-     if (channel) channel.postMessage({ type: 'CLIENT_ACTION', action: { type: 'START_GAME' } });
-     const me = state.players.find(p => p.id === playerId);
-     if (me?.isHost) dispatch({ type: 'START_GAME' });
-  };
-
-  const confirmWordSeen = () => {
-    if (channel) channel.postMessage({ type: 'CLIENT_ACTION', action: { type: 'REVEAL_CONFIRM', payload: { playerId } } });
-    const me = state.players.find(p => p.id === playerId);
-    if (me?.isHost) dispatch({ type: 'REVEAL_CONFIRM', payload: { playerId } });
-  };
-
-  const finishSpeaking = () => {
-    if (channel) channel.postMessage({ type: 'CLIENT_ACTION', action: { type: 'FINISH_SPEAKING', payload: { playerId } } });
-    const me = state.players.find(p => p.id === playerId);
-    if (me?.isHost) dispatch({ type: 'FINISH_SPEAKING', payload: { playerId } });
-  };
-
-  const vote = (targetId: string) => {
-    if (channel) channel.postMessage({ type: 'CLIENT_ACTION', action: { type: 'VOTE', payload: { voterId: playerId, targetId } } });
-    const me = state.players.find(p => p.id === playerId);
-    if (me?.isHost) dispatch({ type: 'VOTE', payload: { voterId: playerId, targetId } });
-  };
-
-  const nextRound = () => {
-     if (channel) channel.postMessage({ type: 'CLIENT_ACTION', action: { type: 'NEXT_ROUND' } });
-     const me = state.players.find(p => p.id === playerId);
-     if (me?.isHost) dispatch({ type: 'NEXT_ROUND' });
-  };
-
-  const resetGame = () => {
-     if (channel) channel.postMessage({ type: 'CLIENT_ACTION', action: { type: 'RESET_GAME' } });
-     const me = state.players.find(p => p.id === playerId);
-     if (me?.isHost) dispatch({ type: 'RESET_GAME' });
-  };
+  // --- Exposed Methods ---
+  
+  const toggleReady = () => sendAction({ type: 'TOGGLE_READY', payload: { playerId } });
+  
+  const startGame = () => sendAction({ type: 'START_GAME' });
+  
+  const confirmWordSeen = () => sendAction({ type: 'REVEAL_CONFIRM', payload: { playerId } });
+  
+  const finishSpeaking = () => sendAction({ type: 'FINISH_SPEAKING', payload: { playerId } });
+  
+  const vote = (targetId: string) => sendAction({ type: 'VOTE', payload: { voterId: playerId, targetId } });
+  
+  const nextRound = () => sendAction({ type: 'NEXT_ROUND' });
+  
+  const resetGame = () => sendAction({ type: 'RESET_GAME' });
 
   return (
     <GameContext.Provider value={{
       state,
       playerId,
       isHost: state.players.find(p => p.id === playerId)?.isHost || false,
-      createRoom: createRoomWithSlug,
+      createRoom,
       joinRoom,
       toggleReady,
       startGame,
@@ -401,7 +460,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       finishSpeaking,
       vote,
       nextRound,
-      resetGame
+      resetGame,
+      connectionStatus
     }}>
       {children}
     </GameContext.Provider>

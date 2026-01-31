@@ -1,28 +1,30 @@
 'use client';
 
-import React from 'react';
+import { Check, Crown, Copy, Link as LinkIcon } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { useState } from 'react';
 import { useGame } from '@/context/GameContext';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { parseAvatar } from '@/lib/utils';
-import { Check, Crown, Copy, Link as LinkIcon } from 'lucide-react';
-import { motion } from 'framer-motion';
-import { useState } from 'react';
 
 export default function Lobby() {
   const { state, playerId, isHost, toggleReady, startGame } = useGame();
   const [copied, setCopied] = useState(false);
   
-  const players = state.players;
+  const players = state.players || [];
   const canStart = isHost && players.filter(p => p.isReady).length >= 4;
 
   const myPlayer = players.find(p => p.id === playerId);
 
-  const copyLink = () => {
-    const url = window.location.href;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyLink = async () => {
+    try {
+        await navigator.clipboard.writeText(window.location.href);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+        console.error('Failed to copy', err);
+    }
   };
 
   return (

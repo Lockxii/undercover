@@ -5,47 +5,42 @@ import { useGame } from '@/context/GameContext';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { motion } from 'framer-motion';
-import { User } from 'lucide-react';
+import { User, Loader2 } from 'lucide-react';
 
 export default function PseudoScreen({ slug }: { slug: string }) {
-  const { createRoom, joinRoom } = useGame();
+  const { createRoom, joinRoom, connectionStatus } = useGame();
   const [pseudo, setPseudo] = useState('');
   const [isChecking, setIsChecking] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
 
   const handleEnter = async () => {
     if (pseudo.length < 3) return;
     setIsChecking(true);
+    setStatusMessage('Vérification de la room...');
 
-    // Discovery Logic
-    const channelName = `undercover-game-${slug}`;
-    const bc = new BroadcastChannel(channelName);
+    // Strategy: Try to CREATE the room first.
+    // If it fails (ID taken), it means the room exists -> JOIN.
+    // If it succeeds, we are the HOST.
     
-    let hostFound = false;
-
-    const listener = (event: MessageEvent) => {
-      if (event.data.type === 'SYNC_STATE' || event.data.type === 'PONG') {
-        hostFound = true;
-      }
-    };
-
-    bc.addEventListener('message', listener);
+    const success = await createRoom(pseudo, slug);
     
-    // Send PING
-    bc.postMessage({ type: 'PING' });
-    
-    // Wait 500ms
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    bc.removeEventListener('message', listener);
-    bc.close();
-
-    if (hostFound) {
-      joinRoom(slug, pseudo);
+    if (success) {
+        // We are Host
+        console.log("Room created, I am host.");
     } else {
-      createRoom(pseudo, slug);
+        // Room exists, Join it
+        console.log("Room exists, joining...");
+        setStatusMessage('Connexion à l\'hôte...');
+        joinRoom(slug, pseudo);
+        
+        // Give it a moment to connect
+        setTimeout(() => {
+            // If still not connected after 5s, maybe error?
+            // The GameManager will switch view once we have state.
+        }, 5000);
     }
     
-    setIsChecking(false);
+    // We don't turn off checking immediately if joining, as we wait for state sync
   };
 
   return (
@@ -56,7 +51,7 @@ export default function PseudoScreen({ slug }: { slug: string }) {
         className="w-full max-w-sm bg-white rounded-3xl p-8 shadow-sm border-2 border-gray-100 text-center"
       >
         <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6 text-brand-blue">
-          <User size={40} />
+          {isChecking ? <Loader2 size={40} className="animate-spin" /> : <User size={40} />}
         </div>
         
         <h2 className="text-2xl font-black text-gray-700 mb-2">Qui es-tu ?</h2>
@@ -72,6 +67,7 @@ export default function PseudoScreen({ slug }: { slug: string }) {
             className="text-center"
             maxLength={12}
             onKeyDown={(e) => e.key === 'Enter' && handleEnter()}
+            disabled={isChecking}
           />
           
           <Button 
@@ -83,6 +79,12 @@ export default function PseudoScreen({ slug }: { slug: string }) {
             {isChecking ? 'Connexion...' : 'Valider'}
           </Button>
         </div>
+
+        {statusMessage && (
+            <p className="mt-4 text-sm text-gray-400 animate-pulse font-bold">
+                {statusMessage}
+            </p>
+        )}
       </motion.div>
       
       <p className="mt-8 text-gray-400 text-sm font-bold">
