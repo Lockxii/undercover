@@ -1,0 +1,16 @@
+{
+  "name": "Undercover Pro",
+  "short_name": "Undercover",
+  "description": "Le jeu de déduction sociale",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F7F7",
+  "theme_color": "#58CC02",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
