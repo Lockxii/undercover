@@ -4,8 +4,10 @@ export type GamePhase =
   | 'LOBBY' 
   | 'REVEAL_WORD' 
   | 'DISCUSSION' 
-  | 'VOTE_WAITING' // Waiting for everyone to say "I'm done speaking"
-  | 'VOTE_IN_PROGRESS' // Actual voting phase
+  | 'VOTE_WAITING' 
+  | 'VOTE_IN_PROGRESS' 
+  | 'TIE_BREAKER_ARGUMENT' // New
+  | 'TIE_BREAKER_VOTE' // New
   | 'REVEAL_RESULT' 
   | 'GAME_OVER';
 
@@ -42,5 +44,6 @@ export interface GameState {
   
   // For voting results
   votes: Record<string, string>; // voterId -> targetId
+  tieBreakerIds: string[] | null; // IDs of players in tie
   impostorFound: boolean | null;
 }

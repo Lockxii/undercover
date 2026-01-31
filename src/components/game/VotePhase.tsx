@@ -16,6 +16,8 @@ export default function VotePhase() {
   
   if (!myPlayer) return null;
 
+  const isTieBreaker = state.phase === 'TIE_BREAKER_VOTE';
+
   // Spectator View (Dead)
   if (!myPlayer.isAlive) {
       return (
@@ -56,21 +58,23 @@ export default function VotePhase() {
     <div className="flex flex-col h-screen max-w-md mx-auto p-4">
       <header className="py-4 text-center">
         <h2 className="text-2xl font-black text-red-500">
-          Qui est l'imposteur ?
+          {isTieBreaker ? "Vote Décisif" : "Qui est l'imposteur ?"}
         </h2>
         <p className="text-gray-400 font-bold text-sm">
-          Sélectionne un joueur
+          {isTieBreaker ? "Tranchez entre les suspects" : "Sélectionne un joueur"}
         </p>
       </header>
 
       <div className="flex-1 overflow-y-auto py-4">
         <div className="grid grid-cols-2 gap-4">
           {state.players.map((p) => {
-            // Logic: 
-            // - Can't vote for self
-            // - Can't vote for dead people
             if (p.id === playerId) return null;
             if (!p.isAlive) return null; 
+            
+            // TIE BREAKER FILTER
+            if (isTieBreaker && state.tieBreakerIds && !state.tieBreakerIds.includes(p.id)) {
+                return null;
+            }
             
             const { emoji, color } = parseAvatar(p.avatar);
             const isSelected = selectedId === p.id;

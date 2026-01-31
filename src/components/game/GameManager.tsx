@@ -25,8 +25,10 @@ export default function GameManager({ slug }: { slug: string }) {
       return <RevealWord />;
     case 'DISCUSSION':
     case 'VOTE_WAITING':
+    case 'TIE_BREAKER_ARGUMENT':
       return <Discussion />;
     case 'VOTE_IN_PROGRESS':
+    case 'TIE_BREAKER_VOTE':
       return <VotePhase />;
     case 'REVEAL_RESULT':
     case 'GAME_OVER':

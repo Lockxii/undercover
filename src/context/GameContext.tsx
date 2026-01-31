@@ -16,6 +16,7 @@ type Action =
   | { type: 'REVEAL_CONFIRM'; payload: { playerId: string } }
   | { type: 'FINISH_SPEAKING'; payload: { playerId: string } }
   | { type: 'VOTE'; payload: { voterId: string; targetId: string } }
+  | { type: 'START_TIE_VOTE' }
   | { type: 'NEXT_ROUND' }
   | { type: 'RESET_GAME' }
   | { type: 'UPDATE_PLAYERS'; payload: Player[] }; 
@@ -31,6 +32,7 @@ const initialState: GameState = {
   createdAt: Date.now(),
   lastActiveAt: Date.now(),
   votes: {},
+  tieBreakerIds: null,
   impostorFound: null,
 };
 
@@ -39,13 +41,14 @@ interface GameContextType {
   state: GameState;
   playerId: string;
   isHost: boolean;
-  createRoom: (name: string, slug?: string) => Promise<boolean>; // Return success/fail for host claim
+  createRoom: (name: string, slug?: string) => Promise<boolean>;
   joinRoom: (slug: string, name: string) => void;
   toggleReady: () => void;
   startGame: () => void;
   confirmWordSeen: () => void;
   finishSpeaking: () => void;
   vote: (targetId: string) => void;
+  startTieVote: () => void;
   nextRound: () => void;
   resetGame: () => void;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -80,9 +83,6 @@ function gameReducer(state: GameState, action: Action): GameState {
       };
 
     case 'JOIN_ROOM':
-      // We don't add player here for Client, we wait for Host to Sync back
-      // But for Host, we might process it if we dispatched it locally?
-      // Actually, Host receives "CLIENT_ACTION" -> "JOIN_ROOM"
       if (state.players.some(p => p.name === action.payload.playerName)) return state;
       
       const isLateJoiner = state.phase !== 'LOBBY';
@@ -95,13 +95,13 @@ function gameReducer(state: GameState, action: Action): GameState {
             id: crypto.randomUUID(),
             name: action.payload.playerName,
             avatar: generateAvatar(),
-            role: null, // Spectators have no role or word
+            role: null,
             word: null,
             isHost: false,
             isReady: false,
-            isAlive: !isLateJoiner, // Late joiners are dead/spectators
-            hasSeenWord: isLateJoiner, // Don't block reveal
-            hasFinishedSpeaking: isLateJoiner, // Don't block discussion
+            isAlive: !isLateJoiner,
+            hasSeenWord: isLateJoiner,
+            hasFinishedSpeaking: isLateJoiner,
             votedForId: null,
           }
         ]
@@ -142,6 +142,7 @@ function gameReducer(state: GameState, action: Action): GameState {
         currentWordPair: pair,
         players: newPlayers,
         votes: {},
+        tieBreakerIds: null,
         impostorFound: null,
       };
     }
@@ -150,7 +151,6 @@ function gameReducer(state: GameState, action: Action): GameState {
       const playersAfterReveal = state.players.map(p => 
         p.id === action.payload.playerId ? { ...p, hasSeenWord: true } : p
       );
-      // Check if all ALIVE players have seen
       const allSeen = playersAfterReveal.filter(p => p.isAlive).every(p => p.hasSeenWord);
       return {
         ...state,
@@ -164,17 +164,44 @@ function gameReducer(state: GameState, action: Action): GameState {
       );
       const alivePlayers = playersAfterSpeak.filter(p => p.isAlive);
       const allFinished = alivePlayers.every(p => p.hasFinishedSpeaking);
+      // If we are in Argument phase, we don't auto-transition usually, but let's keep it simple.
+      // If all speakers (tied players?) are done. 
+      // Actually, standard game: "Finished Speaking" is for MAIN discussion.
+      // For Tie-Breaker Argument, maybe just use Timer/Host button?
+      // Let's rely on Host action 'START_TIE_VOTE'.
+      
       return {
         ...state,
         players: playersAfterSpeak,
-        phase: allFinished ? 'VOTE_IN_PROGRESS' : (state.phase === 'DISCUSSION' ? 'VOTE_WAITING' : state.phase),
+        phase: (state.phase === 'TIE_BREAKER_ARGUMENT') 
+             ? 'TIE_BREAKER_ARGUMENT' // Stay until host clicks
+             : (allFinished ? 'VOTE_IN_PROGRESS' : (state.phase === 'DISCUSSION' ? 'VOTE_WAITING' : state.phase)),
       };
+      
+    case 'START_TIE_VOTE':
+        return {
+            ...state,
+            phase: 'TIE_BREAKER_VOTE',
+            votes: {}, // Clear previous votes
+            players: state.players.map(p => ({
+                ...p,
+                votedForId: null // Reset votes
+            }))
+        };
 
     case 'VOTE': {
        const newVotes = { ...state.votes, [action.payload.voterId]: action.payload.targetId };
        const playersVoted = state.players.map(p => 
          p.id === action.payload.voterId ? { ...p, votedForId: action.payload.targetId } : p
        );
+       
+       // Who can vote?
+       // Tie Breaker Vote: Only players NOT in the tie? Or everyone?
+       // Usually EVERYONE votes to break the tie.
+       // The prompt says "on fait directe un deuxième vote, avec que les joueurs ciblés par l'égalité".
+       // Interpretation A: Only tied players ARE CANDIDATES. Everyone votes.
+       // Interpretation B: Only tied players VOTE. (Unlikely).
+       // I will assume A: Candidates are restricted to tied players. Voters are everyone alive.
        
        const alivePlayersList = playersVoted.filter(p => p.isAlive);
        const allVoted = alivePlayersList.every(p => p.votedForId !== null);
@@ -186,25 +213,50 @@ function gameReducer(state: GameState, action: Action): GameState {
        };
 
        if (allVoted) {
-         nextState.phase = 'REVEAL_RESULT';
-         
+         // Calculate Results
          const voteCounts: Record<string, number> = {};
          Object.values(newVotes).forEach(target => {
            voteCounts[target] = (voteCounts[target] || 0) + 1;
          });
          
          let maxVotes = 0;
-         let eliminatedId: string | null = null;
+         let tiedCandidates: string[] = [];
+         
          for (const [pid, count] of Object.entries(voteCounts)) {
            if (count > maxVotes) {
              maxVotes = count;
-             eliminatedId = pid;
+             tiedCandidates = [pid];
            } else if (count === maxVotes) {
-             eliminatedId = null; 
+             tiedCandidates.push(pid);
            }
          }
          
-         if (eliminatedId) {
+         // Logic for Tie Handling
+         if (tiedCandidates.length > 1) {
+             // TIE DETECTED
+             if (state.phase === 'TIE_BREAKER_VOTE') {
+                 // Double Tie -> No one dies -> Next Round (Revealed Result = Tie)
+                 nextState.phase = 'REVEAL_RESULT';
+                 nextState.impostorFound = null; // Continue game
+                 // TieBreakerIds remains set so we can show them? Or clear?
+                 // Let's keep them to show "Tie between X and Y".
+             } else {
+                 // First Tie -> Argument Phase
+                 nextState.phase = 'TIE_BREAKER_ARGUMENT';
+                 nextState.tieBreakerIds = tiedCandidates;
+                 nextState.votes = {}; // Clear for UI clarity
+                 // Reset speaking ?
+                 nextState.players = nextState.players.map(p => ({
+                     ...p,
+                     hasFinishedSpeaking: false,
+                     votedForId: null
+                 }));
+             }
+         } else {
+             // NO TIE -> Elimination
+             const eliminatedId = tiedCandidates[0];
+             nextState.phase = 'REVEAL_RESULT';
+             
              nextState.players = nextState.players.map(p => 
                  p.id === eliminatedId ? { ...p, isAlive: false } : p
              );
@@ -222,8 +274,6 @@ function gameReducer(state: GameState, action: Action): GameState {
                      nextState.impostorFound = null;
                  }
              }
-         } else {
-             nextState.impostorFound = null;
          }
        }
        
@@ -235,6 +285,7 @@ function gameReducer(state: GameState, action: Action): GameState {
             ...state,
             phase: 'DISCUSSION',
             votes: {},
+            tieBreakerIds: null,
             players: state.players.map(p => ({
                 ...p,
                 hasFinishedSpeaking: false,
@@ -249,6 +300,7 @@ function gameReducer(state: GameState, action: Action): GameState {
         currentWordPair: null,
         votes: {},
         impostorFound: null,
+        tieBreakerIds: null,
         players: state.players.map(p => ({
           ...p,
           role: null,
@@ -297,15 +349,12 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     const peerId = `${PEER_PREFIX}${newSlug}`;
 
     return new Promise((resolve) => {
-        // Attempt to create Peer with specific ID (Host)
         const peer = new Peer(peerId, { debug: 1 });
         
         peer.on('open', (id) => {
-            console.log('Host created room:', id);
             peerRef.current = peer;
             setConnectionStatus('connected');
             
-            // Initialize Game State
             const hostId = crypto.randomUUID();
             const hostPlayer: Player = {
               id: hostId,
@@ -331,35 +380,17 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
             dispatch({ type: 'SYNC_STATE', payload: newState });
             setPlayerId(hostId);
 
-            // Listen for connections
             peer.on('connection', (conn) => {
                 connectionsRef.current.push(conn);
                 conn.on('data', (data: any) => {
-                    // Host receives Actions from Clients
                     if (data.type === 'CLIENT_ACTION') {
-                        // Special Case: JOIN_ROOM needs to be handled carefully to assign ID
                         if (data.action.type === 'JOIN_ROOM') {
-                             // Check if already in
                              if (newState.players.some(p => p.name === data.action.payload.playerName)) return;
-                             
-                             // Dispatch Join locally
                              dispatch(data.action);
                         } else {
-                            // Regular action
                             dispatch(data.action);
                         }
                     }
-                });
-                
-                conn.on('open', () => {
-                    // Send current state immediately
-                    // We need the *latest* state. 
-                    // Since state in closure might be stale, we use the reducer dispatch?
-                    // Actually we rely on the useEffect hook to sync when state updates.
-                    // But for initial connect, we might want to force sync?
-                    // The useEffect [state] will trigger if we change something.
-                    // If not, we might need a ref for current state?
-                    // For MVP, usually the join triggers a state change (add player), so sync happens.
                 });
             });
 
@@ -367,8 +398,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         });
 
         peer.on('error', (err) => {
-            console.error('Peer error:', err);
-            // If ID is taken, it means room exists
             if (err.type === 'unavailable-id') {
                 resolve(false);
             } else {
@@ -382,8 +411,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const joinRoom = (slug: string, name: string) => {
     setConnectionStatus('connecting');
     const targetPeerId = `${PEER_PREFIX}${slug}`;
-    
-    // Client has random ID
     const peer = new Peer();
     peerRef.current = peer;
 
@@ -393,7 +420,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
 
         conn.on('open', () => {
             setConnectionStatus('connected');
-            // Send Join Request
             conn.send({ 
                 type: 'CLIENT_ACTION', 
                 action: { type: 'JOIN_ROOM', payload: { slug, playerName: name } } 
@@ -403,10 +429,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         conn.on('data', (data: any) => {
             if (data.type === 'SYNC_STATE') {
                 dispatch({ type: 'SYNC_STATE', payload: data.payload });
-                // Find my ID if not set
-                if (!playerId) { // This closure might capture stale playerId, check in render?
-                    // We can't easily check state here.
-                    // But we can check the payload.
+                if (!playerId) {
                     const me = data.payload.players.find((p: Player) => p.name === name);
                     if (me) setPlayerId(me.id);
                 }
@@ -419,13 +442,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         });
         
         peer.on('error', (err) => {
-             console.error('Client peer error', err);
              setConnectionStatus('error');
         });
     });
   };
 
-  // Helper to send action to Host (or dispatch if I am Host)
   const sendAction = (action: Action) => {
       const me = state.players.find(p => p.id === playerId);
       if (me?.isHost) {
@@ -435,20 +456,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       }
   };
 
-  // --- Exposed Methods ---
-  
   const toggleReady = () => sendAction({ type: 'TOGGLE_READY', payload: { playerId } });
-  
   const startGame = () => sendAction({ type: 'START_GAME' });
-  
   const confirmWordSeen = () => sendAction({ type: 'REVEAL_CONFIRM', payload: { playerId } });
-  
   const finishSpeaking = () => sendAction({ type: 'FINISH_SPEAKING', payload: { playerId } });
-  
   const vote = (targetId: string) => sendAction({ type: 'VOTE', payload: { voterId: playerId, targetId } });
-  
+  const startTieVote = () => sendAction({ type: 'START_TIE_VOTE' });
   const nextRound = () => sendAction({ type: 'NEXT_ROUND' });
-  
   const resetGame = () => sendAction({ type: 'RESET_GAME' });
 
   return (
@@ -463,6 +477,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       confirmWordSeen,
       finishSpeaking,
       vote,
+      startTieVote,
       nextRound,
       resetGame,
       connectionStatus
