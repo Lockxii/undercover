@@ -14,13 +14,13 @@ export default function Lobby() {
   const [copied, setCopied] = useState(false);
   
   const players = state.players || [];
-  const canStart = isHost && players.filter(p => p.isReady).length >= 3;
+  const canStart = isHost && players.length >= 3 && players.every(p => p.isReady);
 
   const myPlayer = players.find(p => p.id === playerId);
 
   const copyLink = async () => {
     try {
-        await navigator.clipboard.writeText(window.location.href);
+        await navigator.clipboard.writeText(`${window.location.origin}/room/${state.roomSlug}`);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -81,6 +81,7 @@ export default function Lobby() {
       </div>
 
       <div className="py-4 space-y-3 bg-brand-background">
+        <p className="text-center text-sm text-gray-500">Au moins 3 joueurs, tous prêts. L’hôte doit garder cette page ouverte.</p>
         <Mascot 
             message="Préparez-vous ! Un seul d'entre vous mentira... Soyez attentifs aux détails !" 
             className="mb-2"

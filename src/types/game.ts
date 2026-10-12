@@ -20,6 +20,7 @@ export interface Player {
   isHost: boolean;
   isReady: boolean;
   isAlive: boolean; // New field for elimination
+  isConnected?: boolean;
   
   // Game State Flags
   hasSeenWord: boolean;

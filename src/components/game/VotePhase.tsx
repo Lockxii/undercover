@@ -80,7 +80,10 @@ export default function VotePhase() {
             const isSelected = selectedId === p.id;
 
             return (
-              <motion.div 
+              <motion.button
+                type="button"
+                aria-pressed={isSelected}
+                aria-label={`Voter pour ${p.name}`}
                 key={p.id}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setSelectedId(p.id)}
@@ -93,7 +96,7 @@ export default function VotePhase() {
                     {p.name}
                   </span>
                 </Card>
-              </motion.div>
+              </motion.button>
             );
           })}
         </div>

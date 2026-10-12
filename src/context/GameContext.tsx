@@ -1,48 +1,18 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useReducer, useState, useRef } from 'react';
-import { GameState, Player, Role } from '@/types/game';
-import { generateRoomSlug, generateAvatar } from '@/lib/utils';
-import { getRandomWordPair } from '@/lib/words';
-import Peer, { DataConnection } from 'peerjs';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import Peer, { type DataConnection } from 'peerjs';
+import type { GameState } from '@/types/game';
+import { generateAvatar } from '@/lib/utils';
+import { clientAction, gameReducer, initialState, makePlayer, normalizeSlug, playerView, validSlug, type GameAction } from '@/lib/game';
 
-// --- Actions ---
-type Action =
-  | { type: 'SYNC_STATE'; payload: GameState }
-  | { type: 'CREATE_ROOM'; payload: { hostName: string; slug?: string } }
-  | { type: 'JOIN_ROOM'; payload: { slug: string; playerName: string } }
-  | { type: 'TOGGLE_READY'; payload: { playerId: string } }
-  | { type: 'START_GAME' }
-  | { type: 'REVEAL_CONFIRM'; payload: { playerId: string } }
-  | { type: 'FINISH_SPEAKING'; payload: { playerId: string } }
-  | { type: 'VOTE'; payload: { voterId: string; targetId: string } }
-  | { type: 'START_TIE_VOTE' }
-  | { type: 'NEXT_ROUND' }
-  | { type: 'RESET_GAME' }
-  | { type: 'UPDATE_PLAYERS'; payload: Player[] }; 
-
-// --- Initial State ---
-const initialState: GameState = {
-  roomId: '',
-  roomSlug: '',
-  players: [],
-  phase: 'LOBBY',
-  currentWordPair: null,
-  settings: { impostorCount: 1, difficulty: 'moyen' },
-  createdAt: Date.now(),
-  lastActiveAt: Date.now(),
-  votes: {},
-  tieBreakerIds: null,
-  impostorFound: null,
-};
-
-// --- Context ---
+type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 interface GameContextType {
   state: GameState;
   playerId: string;
   isHost: boolean;
-  createRoom: (name: string, slug?: string) => Promise<boolean>;
-  joinRoom: (slug: string, name: string) => void;
+  enterRoom: (slug: string, name: string, create: boolean) => Promise<void>;
+  leaveRoom: () => void;
   toggleReady: () => void;
   startGame: () => void;
   confirmWordSeen: () => void;
@@ -51,444 +21,263 @@ interface GameContextType {
   startTieVote: () => void;
   nextRound: () => void;
   resetGame: () => void;
-  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+  connectionStatus: ConnectionStatus;
+  connectionError: string;
 }
 
 const GameContext = createContext<GameContextType | null>(null);
+const PEER_PREFIX = 'undercover-pro-v2-';
+const TIMEOUT = 15000;
 
-function gameReducer(state: GameState, action: Action): GameState {
-  switch (action.type) {
-    case 'SYNC_STATE':
-      return action.payload;
-
-    case 'CREATE_ROOM':
-      const newSlug = action.payload.slug || generateRoomSlug();
-      return {
-        ...initialState,
-        roomId: crypto.randomUUID(),
-        roomSlug: newSlug,
-        players: [{
-          id: crypto.randomUUID(),
-          name: action.payload.hostName,
-          avatar: generateAvatar(),
-          role: null,
-          word: null,
-          isHost: true,
-          isReady: false,
-          isAlive: true,
-          hasSeenWord: false,
-          hasFinishedSpeaking: false,
-          votedForId: null,
-        }],
-      };
-
-    case 'JOIN_ROOM':
-      if (state.players.some(p => p.name === action.payload.playerName)) return state;
-      
-      const isLateJoiner = state.phase !== 'LOBBY';
-      
-      return {
-        ...state,
-        players: [
-          ...state.players,
-          {
-            id: crypto.randomUUID(),
-            name: action.payload.playerName,
-            avatar: generateAvatar(),
-            role: null,
-            word: null,
-            isHost: false,
-            isReady: false,
-            isAlive: !isLateJoiner,
-            hasSeenWord: isLateJoiner,
-            hasFinishedSpeaking: isLateJoiner,
-            votedForId: null,
-          }
-        ]
-      };
-
-    case 'TOGGLE_READY':
-      return {
-        ...state,
-        players: state.players.map(p => 
-          p.id === action.payload.playerId ? { ...p, isReady: !p.isReady } : p
-        )
-      };
-
-    case 'START_GAME': {
-      const pair = getRandomWordPair();
-      const playerCount = state.players.length;
-      const impostorCount = playerCount >= 8 ? 2 : 1;
-      
-      const shuffledIndices = [...Array(playerCount).keys()].sort(() => Math.random() - 0.5);
-      const impostorIndices = shuffledIndices.slice(0, impostorCount);
-
-      const newPlayers = state.players.map((p, idx) => {
-        const isImpostor = impostorIndices.includes(idx);
-        return {
-          ...p,
-          role: (isImpostor ? 'IMPOSTER' : 'CIVIL') as Role,
-          word: isImpostor ? pair.imposter : pair.civil,
-          hasSeenWord: false,
-          hasFinishedSpeaking: false,
-          isAlive: true,
-          votedForId: null,
-        };
-      });
-
-      return {
-        ...state,
-        phase: 'REVEAL_WORD',
-        currentWordPair: pair,
-        players: newPlayers,
-        votes: {},
-        tieBreakerIds: null,
-        impostorFound: null,
-      };
-    }
-
-    case 'REVEAL_CONFIRM':
-      const playersAfterReveal = state.players.map(p => 
-        p.id === action.payload.playerId ? { ...p, hasSeenWord: true } : p
-      );
-      const allSeen = playersAfterReveal.filter(p => p.isAlive).every(p => p.hasSeenWord);
-      return {
-        ...state,
-        players: playersAfterReveal,
-        phase: allSeen ? 'DISCUSSION' : 'REVEAL_WORD',
-      };
-
-    case 'FINISH_SPEAKING':
-      const playersAfterSpeak = state.players.map(p => 
-        p.id === action.payload.playerId ? { ...p, hasFinishedSpeaking: true } : p
-      );
-      const alivePlayers = playersAfterSpeak.filter(p => p.isAlive);
-      const allFinished = alivePlayers.every(p => p.hasFinishedSpeaking);
-      // If we are in Argument phase, we don't auto-transition usually, but let's keep it simple.
-      // If all speakers (tied players?) are done. 
-      // Actually, standard game: "Finished Speaking" is for MAIN discussion.
-      // For Tie-Breaker Argument, maybe just use Timer/Host button?
-      // Let's rely on Host action 'START_TIE_VOTE'.
-      
-      return {
-        ...state,
-        players: playersAfterSpeak,
-        phase: (state.phase === 'TIE_BREAKER_ARGUMENT') 
-             ? 'TIE_BREAKER_ARGUMENT' // Stay until host clicks
-             : (allFinished ? 'VOTE_IN_PROGRESS' : (state.phase === 'DISCUSSION' ? 'VOTE_WAITING' : state.phase)),
-      };
-      
-    case 'START_TIE_VOTE':
-        return {
-            ...state,
-            phase: 'TIE_BREAKER_VOTE',
-            votes: {}, // Clear previous votes
-            players: state.players.map(p => ({
-                ...p,
-                votedForId: null // Reset votes
-            }))
-        };
-
-    case 'VOTE': {
-       const newVotes = { ...state.votes, [action.payload.voterId]: action.payload.targetId };
-       const playersVoted = state.players.map(p => 
-         p.id === action.payload.voterId ? { ...p, votedForId: action.payload.targetId } : p
-       );
-       
-       // Who can vote?
-       // Tie Breaker Vote: Only players NOT in the tie? Or everyone?
-       // Usually EVERYONE votes to break the tie.
-       // The prompt says "on fait directe un deuxième vote, avec que les joueurs ciblés par l'égalité".
-       // Interpretation A: Only tied players ARE CANDIDATES. Everyone votes.
-       // Interpretation B: Only tied players VOTE. (Unlikely).
-       // I will assume A: Candidates are restricted to tied players. Voters are everyone alive.
-       
-       const alivePlayersList = playersVoted.filter(p => p.isAlive);
-       const allVoted = alivePlayersList.every(p => p.votedForId !== null);
-       
-       let nextState = {
-         ...state,
-         votes: newVotes,
-         players: playersVoted,
-       };
-
-       if (allVoted) {
-         // Calculate Results
-         const voteCounts: Record<string, number> = {};
-         Object.values(newVotes).forEach(target => {
-           voteCounts[target] = (voteCounts[target] || 0) + 1;
-         });
-         
-         let maxVotes = 0;
-         let tiedCandidates: string[] = [];
-         
-         for (const [pid, count] of Object.entries(voteCounts)) {
-           if (count > maxVotes) {
-             maxVotes = count;
-             tiedCandidates = [pid];
-           } else if (count === maxVotes) {
-             tiedCandidates.push(pid);
-           }
-         }
-         
-         // Logic for Tie Handling
-         if (tiedCandidates.length > 1) {
-             // TIE DETECTED
-             if (state.phase === 'TIE_BREAKER_VOTE') {
-                 // Double Tie -> No one dies -> Next Round (Revealed Result = Tie)
-                 nextState.phase = 'REVEAL_RESULT';
-                 nextState.impostorFound = null; // Continue game
-                 // TieBreakerIds remains set so we can show them? Or clear?
-                 // Let's keep them to show "Tie between X and Y".
-             } else {
-                 // First Tie -> Argument Phase
-                 nextState.phase = 'TIE_BREAKER_ARGUMENT';
-                 nextState.tieBreakerIds = tiedCandidates;
-                 nextState.votes = {}; // Clear for UI clarity
-                 // Reset speaking ?
-                 nextState.players = nextState.players.map(p => ({
-                     ...p,
-                     hasFinishedSpeaking: false,
-                     votedForId: null
-                 }));
-             }
-         } else {
-             // NO TIE -> Elimination
-             const eliminatedId = tiedCandidates[0];
-             nextState.phase = 'REVEAL_RESULT';
-             
-             nextState.players = nextState.players.map(p => 
-                 p.id === eliminatedId ? { ...p, isAlive: false } : p
-             );
-
-             const impostor = nextState.players.find(p => p.role === 'IMPOSTER');
-             const eliminatedIsImpostor = impostor && eliminatedId === impostor.id;
-             
-             if (eliminatedIsImpostor) {
-                 nextState.impostorFound = true; 
-             } else {
-                 const remainingAlive = nextState.players.filter(p => p.isAlive).length;
-                 if (remainingAlive <= 2) {
-                     nextState.impostorFound = false;
-                 } else {
-                     nextState.impostorFound = null;
-                 }
-             }
-         }
-       }
-       
-       return nextState;
-    }
-
-    case 'NEXT_ROUND':
-        return {
-            ...state,
-            phase: 'DISCUSSION',
-            votes: {},
-            tieBreakerIds: null,
-            players: state.players.map(p => ({
-                ...p,
-                hasFinishedSpeaking: false,
-                votedForId: null
-            }))
-        };
-
-    case 'RESET_GAME':
-      return {
-        ...state,
-        phase: 'LOBBY',
-        currentWordPair: null,
-        votes: {},
-        impostorFound: null,
-        tieBreakerIds: null,
-        players: state.players.map(p => ({
-          ...p,
-          role: null,
-          word: null,
-          hasSeenWord: false,
-          hasFinishedSpeaking: false,
-          isReady: false,
-          isAlive: true,
-          votedForId: null,
-        })),
-      };
-
-    default:
-      return state;
+function peerError(type: string): string {
+  switch (type) {
+    case 'unavailable-id': return 'Ce code est déjà utilisé. Crée une autre salle ou rejoins celle-ci.';
+    case 'peer-unavailable': return "Salle introuvable. Vérifie le code et demande à l’hôte de garder sa page ouverte.";
+    case 'browser-incompatible': return 'Ce navigateur ne permet pas le jeu en ligne. Essaie un navigateur récent.';
+    default: return 'Connexion impossible. Vérifie Internet et réessaie. Certains réseaux bloquent les connexions entre joueurs.';
   }
 }
 
-const PEER_PREFIX = 'undercover-pro-v1-';
-
 export function GameProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(gameReducer, initialState);
-  const [playerId, setPlayerId] = useState<string>('');
-  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
-  
+  const [state, setState] = useState<GameState>(initialState);
+  const [playerId, setPlayerId] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [connectionError, setConnectionError] = useState('');
+  const stateRef = useRef(initialState);
+  const playerIdRef = useRef('');
   const peerRef = useRef<Peer | null>(null);
-  const connectionsRef = useRef<DataConnection[]>([]);
+  const connectionsRef = useRef(new Map<DataConnection, string>());
   const hostConnectionRef = useRef<DataConnection | null>(null);
+  const cancelRef = useRef<(() => void) | null>(null);
 
-  // --- Host Logic: Broadcast State ---
+  const cleanup = () => {
+    cancelRef.current?.();
+    cancelRef.current = null;
+    const peer = peerRef.current;
+    peerRef.current = null;
+    hostConnectionRef.current = null;
+    connectionsRef.current.clear();
+    peer?.destroy();
+  };
+
   useEffect(() => {
-    const me = state.players.find(p => p.id === playerId);
-    if (me?.isHost && connectionsRef.current.length > 0) {
-      connectionsRef.current.forEach(conn => {
-        if (conn.open) {
-          conn.send({ type: 'SYNC_STATE', payload: state });
-        }
-      });
-    }
-  }, [state, playerId]);
-
-  // --- Actions ---
-  
-  const createRoom = async (name: string, slug?: string): Promise<boolean> => {
-    setConnectionStatus('connecting');
-    const newSlug = slug || generateRoomSlug();
-    const peerId = `${PEER_PREFIX}${newSlug}`;
-
-    return new Promise((resolve) => {
-        const peer = new Peer(peerId, { debug: 1 });
-        
-        peer.on('open', (id) => {
-            peerRef.current = peer;
-            setConnectionStatus('connected');
-            
-            const hostId = crypto.randomUUID();
-            const hostPlayer: Player = {
-              id: hostId,
-              name,
-              avatar: generateAvatar(),
-              role: null,
-              word: null,
-              isHost: true,
-              isReady: false,
-              isAlive: true,
-              hasSeenWord: false,
-              hasFinishedSpeaking: false,
-              votedForId: null,
-            };
-            
-            const newState: GameState = {
-              ...initialState,
-              roomId: crypto.randomUUID(),
-              roomSlug: newSlug,
-              players: [hostPlayer],
-            };
-            
-            dispatch({ type: 'SYNC_STATE', payload: newState });
-            setPlayerId(hostId);
-
-            peer.on('connection', (conn) => {
-                connectionsRef.current.push(conn);
-                conn.on('data', (data: any) => {
-                    if (data.type === 'CLIENT_ACTION') {
-                        if (data.action.type === 'JOIN_ROOM') {
-                             if (newState.players.some(p => p.name === data.action.payload.playerName)) return;
-                             dispatch(data.action);
-                        } else {
-                            dispatch(data.action);
-                        }
-                    }
-                });
-            });
-
-            resolve(true);
-        });
-
-        peer.on('error', (err) => {
-            if (err.type === 'unavailable-id') {
-                resolve(false);
-            } else {
-                setConnectionStatus('error');
-                resolve(false);
-            }
-        });
-    });
-  };
-
-  const joinRoom = (slug: string, name: string) => {
-    setConnectionStatus('connecting');
-    const targetPeerId = `${PEER_PREFIX}${slug}`;
-    const peer = new Peer();
-    peerRef.current = peer;
-
-    peer.on('open', () => {
-        const conn = peer.connect(targetPeerId);
-        hostConnectionRef.current = conn;
-
-        conn.on('open', () => {
-            setConnectionStatus('connected');
-            conn.send({ 
-                type: 'CLIENT_ACTION', 
-                action: { type: 'JOIN_ROOM', payload: { slug, playerName: name } } 
-            });
-        });
-
-        conn.on('data', (data: any) => {
-            if (data.type === 'SYNC_STATE') {
-                dispatch({ type: 'SYNC_STATE', payload: data.payload });
-                if (!playerId) {
-                    const me = data.payload.players.find((p: Player) => p.name === name);
-                    if (me) setPlayerId(me.id);
-                }
-            }
-        });
-
-        conn.on('close', () => {
-            setConnectionStatus('disconnected');
-            alert("L'hôte s'est déconnecté.");
-        });
-        
-        peer.on('error', (err) => {
-             setConnectionStatus('error');
-        });
-    });
-  };
-
-  const sendAction = (action: Action) => {
-      const me = state.players.find(p => p.id === playerId);
-      if (me?.isHost) {
-          dispatch(action);
-      } else {
-          hostConnectionRef.current?.send({ type: 'CLIENT_ACTION', action });
+    const disconnect = () => {
+      cancelRef.current?.();
+      const peer = peerRef.current;
+      peerRef.current = null;
+      peer?.destroy();
+    };
+    window.addEventListener('pagehide', disconnect);
+    const resume = (event: PageTransitionEvent) => {
+      if (event.persisted && playerIdRef.current && !peerRef.current) {
+        setConnectionStatus('error');
+        setConnectionError('Cette page a été suspendue. Rejoins la salle pour réessayer.');
       }
+    };
+    window.addEventListener('pageshow', resume);
+    return () => {
+      window.removeEventListener('pagehide', disconnect);
+      window.removeEventListener('pageshow', resume);
+      disconnect();
+    };
+  }, []);
+
+  const publish = (next: GameState) => {
+    stateRef.current = next;
+    setState(next);
+    connectionsRef.current.forEach((id, conn) => {
+      if (conn.open && id) conn.send({ type: 'SYNC_STATE', playerId: id, payload: playerView(next, id) });
+    });
   };
 
-  const toggleReady = () => sendAction({ type: 'TOGGLE_READY', payload: { playerId } });
-  const startGame = () => sendAction({ type: 'START_GAME' });
-  const confirmWordSeen = () => sendAction({ type: 'REVEAL_CONFIRM', payload: { playerId } });
-  const finishSpeaking = () => sendAction({ type: 'FINISH_SPEAKING', payload: { playerId } });
-  const vote = (targetId: string) => sendAction({ type: 'VOTE', payload: { voterId: playerId, targetId } });
-  const startTieVote = () => sendAction({ type: 'START_TIE_VOTE' });
-  const nextRound = () => sendAction({ type: 'NEXT_ROUND' });
-  const resetGame = () => sendAction({ type: 'RESET_GAME' });
+  const apply = (action: GameAction) => {
+    const next = gameReducer(stateRef.current, action);
+    if (next !== stateRef.current) publish(next);
+  };
 
-  return (
-    <GameContext.Provider value={{
-      state,
-      playerId,
-      isHost: state.players.find(p => p.id === playerId)?.isHost || false,
-      createRoom,
-      joinRoom,
-      toggleReady,
-      startGame,
-      confirmWordSeen,
-      finishSpeaking,
-      vote,
-      startTieVote,
-      nextRound,
-      resetGame,
-      connectionStatus
-    }}>
-      {children}
-    </GameContext.Provider>
-  );
+  const leaveRoom = () => {
+    cleanup();
+    playerIdRef.current = '';
+    setPlayerId('');
+    stateRef.current = initialState;
+    setState(initialState);
+    setConnectionStatus('disconnected');
+    setConnectionError('');
+  };
+
+  const enterRoom = async (rawSlug: string, rawName: string, create: boolean) => {
+    if (connectionStatus === 'connecting') return;
+    const slug = normalizeSlug(rawSlug);
+    const name = rawName.trim();
+    if (!validSlug(slug) || name.length < 3 || name.length > 12) {
+      setConnectionError('Utilise un code de salle valide et un pseudo de 3 à 12 caractères.');
+      setConnectionStatus('error');
+      return;
+    }
+    cleanup();
+    setConnectionError('');
+    setConnectionStatus('connecting');
+    playerIdRef.current = '';
+    setPlayerId('');
+    stateRef.current = initialState;
+    setState(initialState);
+
+    await new Promise<void>((resolve) => {
+      const peer = create ? new Peer(`${PEER_PREFIX}${slug}`, { debug: 1 }) : new Peer({ debug: 1 });
+      peerRef.current = peer;
+      let settled = false;
+      let lastHostMessage = Date.now();
+      let lastTick = Date.now();
+      const lastSeen = new Map<DataConnection, number>();
+      const current = () => peerRef.current === peer;
+      const finish = () => {
+        settled = true;
+        clearTimeout(timer);
+        cancelRef.current = null;
+        resolve();
+      };
+      const fail = (message: string) => {
+        if (!current()) return;
+        finish();
+        clearInterval(heartbeat);
+        peerRef.current = null;
+        peer.destroy();
+        hostConnectionRef.current = null;
+        setConnectionError(message);
+        setConnectionStatus('error');
+      };
+      const timer = setTimeout(() => fail('La connexion a expiré. Vérifie le code, Internet et que l’hôte est toujours présent.'), TIMEOUT);
+      const heartbeat = setInterval(() => {
+        if (!current()) { clearInterval(heartbeat); return; }
+        const now = Date.now();
+        // Background tabs can suspend timers: don't blame peers for our own suspension.
+        const suspended = now - lastTick > 15000;
+        lastTick = now;
+        if (create) {
+          connectionsRef.current.forEach((id, conn) => {
+            if (!id || !conn.open) return;
+            if (suspended) lastSeen.set(conn, now);
+            if (now - (lastSeen.get(conn) ?? now) > 45000) {
+              connectionsRef.current.delete(conn);
+              lastSeen.delete(conn);
+              apply({ type: 'REMOVE_PLAYER', playerId: id });
+              conn.close();
+            } else conn.send({ type: 'PING' });
+          });
+        } else if (settled) {
+          if (suspended) lastHostMessage = now;
+          if (now - lastHostMessage > 45000) fail('L’hôte ne répond plus. Reviens à l’accueil pour créer une nouvelle partie.');
+        }
+      }, 5000);
+      cancelRef.current = finish;
+      peer.on('error', err => fail(peerError(err.type)));
+      peer.on('disconnected', () => {
+        if (current() && !peer.destroyed) peer.reconnect();
+      });
+      peer.on('close', () => {
+        if (current()) fail('Connexion fermée. Rejoins la salle pour réessayer.');
+      });
+
+      if (create) {
+        peer.on('connection', conn => {
+          if (!current()) return conn.close();
+          connectionsRef.current.set(conn, '');
+          lastSeen.set(conn, Date.now());
+          const joinTimer = setTimeout(() => conn.close(), TIMEOUT);
+          conn.on('data', (data: unknown) => {
+            if (!current() || !data || typeof data !== 'object' || !('type' in data)) return;
+            const id = connectionsRef.current.get(conn);
+            lastSeen.set(conn, Date.now());
+            if (data.type === 'PONG') return;
+            if (data.type === 'JOIN_ROOM' && id === '') {
+              if (!('name' in data) || typeof data.name !== 'string') return;
+              const guestName = data.name.trim();
+              if (guestName.length < 3 || guestName.length > 12) return;
+              if (stateRef.current.players.some(p => p.name.toLocaleLowerCase() === guestName.toLocaleLowerCase())) {
+                conn.send({ type: 'ERROR', message: 'Ce pseudo est déjà pris. Choisis-en un autre.' });
+                return;
+              }
+              const guestId = crypto.randomUUID();
+              connectionsRef.current.set(conn, guestId);
+              clearTimeout(joinTimer);
+              apply({ type: 'JOIN_ROOM', player: makePlayer(guestId, guestName, generateAvatar()) });
+            } else if (data.type === 'CLIENT_ACTION' && id && 'action' in data) {
+              const action = clientAction(data.action, id);
+              if (action) apply(action);
+            }
+          });
+          const remove = () => {
+            clearTimeout(joinTimer);
+            const id = connectionsRef.current.get(conn);
+            connectionsRef.current.delete(conn);
+            lastSeen.delete(conn);
+            if (current() && id) apply({ type: 'REMOVE_PLAYER', playerId: id });
+          };
+          conn.on('close', remove);
+          conn.on('error', () => { remove(); conn.close(); });
+        });
+      }
+
+      peer.on('open', () => {
+        if (!current() || settled) return;
+        if (create) {
+          const id = crypto.randomUUID();
+          playerIdRef.current = id;
+          setPlayerId(id);
+          publish({ ...initialState, roomId: crypto.randomUUID(), roomSlug: slug, createdAt: Date.now(), lastActiveAt: Date.now(),
+            players: [makePlayer(id, name, generateAvatar(), true)] });
+          setConnectionStatus('connected');
+          // Invitation links always join; only the creator's initial URL uses ?create=1.
+          window.history.replaceState(null, '', `/room/${slug}`);
+          finish();
+          return;
+        }
+        const conn = peer.connect(`${PEER_PREFIX}${slug}`, { reliable: true });
+        hostConnectionRef.current = conn;
+        conn.on('open', () => conn.send({ type: 'JOIN_ROOM', name }));
+        conn.on('data', (data: unknown) => {
+          if (!current() || !data || typeof data !== 'object' || !('type' in data)) return;
+          lastHostMessage = Date.now();
+          if (data.type === 'PING') { conn.send({ type: 'PONG' }); return; }
+          if (data.type === 'ERROR' && 'message' in data && typeof data.message === 'string') return fail(data.message);
+          if (data.type !== 'SYNC_STATE' || !('payload' in data) || !('playerId' in data) || typeof data.playerId !== 'string') return;
+          const next = data.payload as GameState;
+          if (!next || next.roomSlug !== slug || !Array.isArray(next.players) || !next.players.some(p => p.id === data.playerId)) return;
+          stateRef.current = next;
+          setState(next);
+          playerIdRef.current = data.playerId;
+          setPlayerId(data.playerId);
+          setConnectionStatus('connected');
+          finish();
+        });
+        conn.on('close', () => fail("L’hôte a quitté la salle. Une nouvelle partie doit être créée."));
+        conn.on('error', () => fail('La connexion avec l’hôte a échoué. Réessaie.'));
+      });
+    });
+  };
+
+  const sendAction = (action: GameAction) => {
+    if (connectionStatus !== 'connected') return;
+    const me = stateRef.current.players.find(p => p.id === playerIdRef.current);
+    if (me?.isHost) apply(action);
+    else if (hostConnectionRef.current?.open) hostConnectionRef.current.send({ type: 'CLIENT_ACTION', action });
+  };
+
+  return <GameContext.Provider value={{ state, playerId, connectionStatus, connectionError, enterRoom, leaveRoom,
+    isHost: state.players.some(p => p.id === playerId && p.isHost),
+    toggleReady: () => sendAction({ type: 'TOGGLE_READY', playerId }),
+    startGame: () => sendAction({ type: 'START_GAME', playerId }),
+    confirmWordSeen: () => sendAction({ type: 'REVEAL_CONFIRM', playerId }),
+    finishSpeaking: () => sendAction({ type: 'FINISH_SPEAKING', playerId }),
+    vote: targetId => sendAction({ type: 'VOTE', playerId, targetId }),
+    startTieVote: () => sendAction({ type: 'START_TIE_VOTE', playerId }),
+    nextRound: () => sendAction({ type: 'NEXT_ROUND', playerId }),
+    resetGame: () => sendAction({ type: 'RESET_GAME', playerId }),
+  }}>{children}</GameContext.Provider>;
 }
 
-export const useGame = () => {
+export function useGame() {
   const context = useContext(GameContext);
   if (!context) throw new Error('useGame must be used within a GameProvider');
   return context;
-};
+}

@@ -1,14 +1,13 @@
 import type { Metadata, Viewport } from "next";
 import { Nunito } from "next/font/google";
 import "./globals.css";
+import ServiceWorker from '@/components/ServiceWorker';
 
 const nunito = Nunito({ subsets: ["latin"] });
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   themeColor: "#58CC02",
 };
 
@@ -29,7 +28,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr">
-      <body className={nunito.className} suppressHydrationWarning>{children}</body>
+      <body className={nunito.className}>{children}<ServiceWorker /></body>
     </html>
   );
 }
