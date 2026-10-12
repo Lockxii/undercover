@@ -1,6 +1,8 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React from 'react';
+import Link from 'next/link';
+import { Button } from '@/components/Button';
 import { useGame } from '@/context/GameContext';
 import PseudoScreen from './PseudoScreen';
 import Lobby from './Lobby';
@@ -9,12 +11,21 @@ import Discussion from './Discussion';
 import VotePhase from './VotePhase';
 import Result from './Result';
 
-export default function GameManager({ slug }: { slug: string }) {
-  const { state, playerId } = useGame();
+export default function GameManager({ slug, create }: { slug: string; create: boolean }) {
+  const { state, playerId, connectionStatus, connectionError, leaveRoom } = useGame();
+
+  if (playerId && connectionStatus !== 'connected') {
+    return <div className="min-h-screen flex flex-col items-center justify-center gap-6 p-6 text-center">
+      <h2 className="text-2xl font-black">Connexion interrompue</h2>
+      <p role="alert">{connectionError}</p>
+      <Button onClick={leaveRoom}>Revenir à la salle</Button>
+      <Link href="/" className="font-bold text-brand-blue underline">Créer une nouvelle partie</Link>
+    </div>;
+  }
 
   // If no player ID, we show the Entry Screen
   if (!playerId) {
-    return <PseudoScreen slug={slug} />;
+    return <PseudoScreen slug={slug} create={create} />;
   }
 
   // Router for Game Phases

@@ -33,7 +33,6 @@ export default function Discussion() {
   if (!myPlayer) return null;
 
   const isSpectator = !myPlayer.isAlive;
-  const isTiedPlayer = isTieBreaker && state.tieBreakerIds?.includes(myPlayer.id);
 
   return (
     <div className="flex flex-col h-screen max-w-md mx-auto p-4">
@@ -44,7 +43,7 @@ export default function Discussion() {
         </h2>
         <p className="text-gray-400 font-bold text-sm">
           {isTieBreaker 
-            ? "Les suspects ont 2 minutes pour se défendre." 
+            ? "Les suspects se défendent, puis l’hôte lance le vote."
             : (isSpectator ? "Vous êtes éliminé (Spectateur)" : "Qui est l'imposteur ?")
           }
         </p>
@@ -82,7 +81,7 @@ export default function Discussion() {
                   <div className="text-xs font-bold text-gray-400 uppercase">
                     {!isAlive ? 'Éliminé' : 
                       (isTieBreaker && isInTie ? 'En défense' : 
-                      (p.hasFinishedSpeaking ? 'A voté (prêt)' : 'En discussion...'))
+                      (p.hasFinishedSpeaking ? 'A fini de parler' : 'En discussion...'))
                     }
                   </div>
                 </div>
@@ -146,7 +145,7 @@ export default function Discussion() {
         
         {isTieBreaker && !isHost && (
              <p className="text-gray-400 font-bold">
-                 L'hôte lancera le vote...
+                 L&apos;hôte lancera le vote...
              </p>
         )}
         

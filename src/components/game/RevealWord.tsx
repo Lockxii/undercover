@@ -33,16 +33,16 @@ export default function RevealWord() {
   return (
     <div className="flex flex-col h-screen max-w-md mx-auto p-6 items-center justify-center bg-brand-background">
       <h2 className="text-xl font-black text-gray-700 mb-8 text-center">
-        Découvre ton identité secrète
+        Découvre ton mot secret
       </h2>
 
-      <div className="relative w-full aspect-[3/4] max-h-[400px] perspective-1000" onClick={() => !isFlipped && setIsFlipped(true)}>
+      <button type="button" aria-label="Révéler mon mot" aria-expanded={isFlipped} className="relative w-full aspect-[3/4] max-h-[400px] perspective-1000" onClick={() => !isFlipped && setIsFlipped(true)}>
         <motion.div
           className="w-full h-full relative transform-style-3d transition-transform duration-700"
           animate={{ rotateY: isFlipped ? 180 : 0 }}
         >
           {/* FRONT (Hidden) */}
-          <div className="absolute w-full h-full backface-hidden bg-brand-blue rounded-3xl shadow-xl flex flex-col items-center justify-center border-b-8 border-blue-600 cursor-pointer hover:brightness-110 transition-all">
+          <div aria-hidden={isFlipped} className="absolute w-full h-full backface-hidden bg-brand-blue rounded-3xl shadow-xl flex flex-col items-center justify-center border-b-8 border-blue-600 cursor-pointer hover:brightness-110 transition-all">
             <span className="text-6xl mb-4">🕵️</span>
             <p className="text-white font-black text-2xl uppercase tracking-widest">
               Toucher pour révéler
@@ -50,11 +50,11 @@ export default function RevealWord() {
           </div>
 
           {/* BACK (Revealed) */}
-          <div className="absolute w-full h-full backface-hidden bg-white rounded-3xl shadow-xl flex flex-col items-center justify-center border-2 border-gray-100 rotate-y-180 p-6 text-center">
+          <div aria-hidden={!isFlipped} className="absolute w-full h-full backface-hidden bg-white rounded-3xl shadow-xl flex flex-col items-center justify-center border-2 border-gray-100 rotate-y-180 p-6 text-center">
             {myPlayer.role === 'IMPOSTER' ? (
               <div className="mb-6">
                 <span className="bg-red-100 text-red-500 px-4 py-1 rounded-full text-xs font-black uppercase tracking-widest">
-                  Tu es l'imposteur
+                  Tu es l&apos;imposteur
                 </span>
               </div>
             ) : (
@@ -77,7 +77,7 @@ export default function RevealWord() {
             </p>
           </div>
         </motion.div>
-      </div>
+      </button>
 
       <div className="mt-8 w-full">
         {isFlipped ? (

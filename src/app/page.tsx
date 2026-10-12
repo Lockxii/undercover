@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { generateRoomSlug } from '@/lib/utils';
+import { normalizeSlug, validSlug } from '@/lib/game';
 import { Search, Plus } from 'lucide-react'; // Need to check icons
 
 export default function Home() {
@@ -15,7 +16,7 @@ export default function Home() {
 
   const handleCreate = () => {
     const slug = generateRoomSlug();
-    router.push(`/room/${slug}`);
+    router.push(`/room/${slug}?create=1`);
   };
 
   const handleJoin = () => {
@@ -23,8 +24,9 @@ export default function Home() {
       setShowJoinInput(true);
       return;
     }
-    if (joinSlug.length < 3) return;
-    router.push(`/room/${joinSlug.toLowerCase()}`);
+    const slug = normalizeSlug(joinSlug);
+    if (!validSlug(slug)) return;
+    router.push(`/room/${slug}`);
   };
 
   return (
@@ -40,7 +42,7 @@ export default function Home() {
           <span className="text-[#2B70C9]">COVER</span>
         </h1>
         <p className="text-gray-500 font-bold text-lg">
-          Démasquez l'imposteur en 3 min
+          Démasquez l&apos;imposteur en 3 min
         </p>
       </motion.div>
 
@@ -64,7 +66,9 @@ export default function Home() {
               className="space-y-3"
             >
               <Input
-                placeholder="Code de la room (ex: joli-tigre-8)"
+                aria-label="Code de la salle"
+                placeholder="Code de la salle (ex: joli-tigre-8)"
+                maxLength={64}
                 value={joinSlug}
                 onChange={(e) => setJoinSlug(e.target.value)}
                 autoFocus
@@ -75,7 +79,7 @@ export default function Home() {
                 size="lg" 
                 fullWidth 
                 onClick={handleJoin}
-                disabled={joinSlug.length < 3}
+                disabled={!validSlug(normalizeSlug(joinSlug))}
               >
                 Rejoindre
               </Button>
@@ -113,7 +117,7 @@ export default function Home() {
           </li>
           <li className="flex gap-2">
             <span className="bg-green-100 text-green-600 rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">3</span>
-            Votez pour éliminer l'imposteur !
+            Votez pour éliminer l&apos;imposteur !
           </li>
         </ol>
       </motion.div>

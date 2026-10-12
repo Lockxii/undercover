@@ -14,7 +14,6 @@ export default function Result() {
   const [revealed, setRevealed] = useState(false);
   const [shared, setShared] = useState(false);
   
-  const impostor = state.players.find(p => p.role === 'IMPOSTER');
   
   const shareResult = async () => {
       const gameResult = state.impostorFound;
@@ -37,16 +36,9 @@ export default function Result() {
   Object.values(state.votes).forEach(target => {
     voteCounts[target] = (voteCounts[target] || 0) + 1;
   });
-  let maxVotes = 0;
-  let eliminatedId: string | null = null;
-  for (const [pid, count] of Object.entries(voteCounts)) {
-    if (count > maxVotes) {
-      maxVotes = count;
-      eliminatedId = pid;
-    } else if (count === maxVotes) {
-      eliminatedId = null; // Tie
-    }
-  }
+  const maxVotes = Math.max(0, ...Object.values(voteCounts));
+  const leaders = Object.keys(voteCounts).filter(id => voteCounts[id] === maxVotes);
+  const eliminatedId = leaders.length === 1 ? leaders[0] : null;
   const eliminatedPlayer = state.players.find(p => p.id === eliminatedId);
 
   // Game Status
@@ -77,7 +69,6 @@ export default function Result() {
     return () => clearTimeout(timer);
   }, []);
 
-  if (!impostor) return null;
 
   return (
     <div className="flex flex-col min-h-screen max-w-md mx-auto p-4 bg-brand-background">
@@ -94,7 +85,7 @@ export default function Result() {
              {isGameOver ? (
                  <>
                     <h2 className={`text-4xl font-black mb-2 ${gameResult ? 'text-brand-green' : 'text-brand-red'}`}>
-                        {gameResult ? 'Les Civils gagnent !' : "L'Imposteur gagne !"}
+                        {gameResult ? 'Les Civils gagnent !' : 'Les Imposteurs gagnent !'}
                     </h2>
                     <p className="text-gray-500 font-bold">
                         {gameResult ? "L'imposteur a été démasqué." : "Il s'est bien caché..."}
@@ -103,10 +94,10 @@ export default function Result() {
              ) : (
                  <>
                     <h2 className="text-3xl font-black mb-2 text-gray-700">
-                        L'enquête continue...
+                        L&apos;enquête continue...
                     </h2>
                     <p className="text-gray-500 font-bold">
-                        Ce n'était pas l'imposteur !
+                        {eliminatedPlayer ? (eliminatedPlayer.role === 'IMPOSTER' ? 'Un imposteur est éliminé. Il en reste !' : 'Un civil a été éliminé.') : 'Personne n’est éliminé ce tour-ci.'}
                     </p>
                  </>
              )}
@@ -132,12 +123,12 @@ export default function Result() {
                       </div>
                       <h3 className="text-2xl font-black text-gray-800 mb-1">{eliminatedPlayer.name}</h3>
                       
-                      {isGameOver && gameResult ? (
+                      {eliminatedPlayer.role === 'IMPOSTER' ? (
                           <div className="text-center mt-2">
                              <span className="bg-red-100 text-red-500 px-3 py-1 rounded-full text-xs font-black uppercase mb-2 inline-block">
                                 Imposteur
                              </span>
-                             <p className="text-2xl font-black text-gray-800 mt-2">{impostor.word}</p>
+                             {isGameOver && <p className="text-2xl font-black text-gray-800 mt-2">{eliminatedPlayer.word}</p>}
                           </div>
                       ) : (
                           <div className="text-center mt-2">
@@ -153,11 +144,11 @@ export default function Result() {
         )}
         
         {/* If no one eliminated (Tie) */}
-        {revealed && !eliminatedPlayer && (
+        {revealed && !eliminatedPlayer && Object.keys(state.votes).length > 0 && (
             <div className="text-center p-6 bg-white rounded-2xl shadow-sm border-2 border-gray-100">
                 <span className="text-4xl">⚖️</span>
                 <p className="font-bold text-gray-700 mt-2">Égalité parfaite</p>
-                <p className="text-sm text-gray-500">Personne n'est éliminé.</p>
+                <p className="text-sm text-gray-500">Personne n&apos;est éliminé.</p>
             </div>
         )}
 
@@ -169,7 +160,7 @@ export default function Result() {
                if (!p.votedForId) return null;
                const target = state.players.find(t => t.id === p.votedForId);
                // Highlight correct/incorrect if game over, else neutral
-               const isTargetImpostor = target?.id === impostor.id;
+               const isTargetImpostor = target?.role === 'IMPOSTER';
                const highlight = isGameOver ? (isTargetImpostor ? 'text-brand-green' : 'text-brand-red') : 'text-gray-800';
                
                return (
@@ -186,7 +177,16 @@ export default function Result() {
         )}
       </div>
 
-      {revealed && (
+      {revealed && isGameOver && (
+        <div className="space-y-2 py-4">
+          <h3 className="font-bold text-center">Les identités secrètes</h3>
+          {state.players.filter(p => p.role !== null).map(p => <p key={p.id} className="text-center text-sm">
+            <strong>{p.name}</strong> : {p.role === 'IMPOSTER' ? 'Imposteur' : 'Civil'} — {p.word}
+          </p>)}
+        </div>
+      )}
+
+      {revealed && isGameOver && (
         <div className="py-2">
             <Button 
                 fullWidth 
@@ -216,7 +216,7 @@ export default function Result() {
       
       {!isHost && revealed && !isGameOver && (
           <div className="py-4 text-center text-gray-400 font-bold animate-pulse">
-              En attente de l'hôte pour le tour suivant...
+              En attente de l&apos;hôte pour le tour suivant...
           </div>
       )}
     </div>

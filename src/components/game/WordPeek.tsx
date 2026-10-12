@@ -51,7 +51,7 @@ export default function WordPeek() {
               </h2>
               {myPlayer.role === 'IMPOSTER' && (
                  <span className="inline-block bg-red-100 text-red-500 px-3 py-1 rounded-full text-xs font-black uppercase mt-2">
-                    Tu es l'imposteur
+                    Tu es l&apos;imposteur
                  </span>
               )}
               
